@@ -38,7 +38,13 @@ npm run dev
   幂等判断只查库，不用进程内 Set。
 - 路径：装载前按业务键查回执 → 命中则整键跳过并写 `skip` 证明（不插点、不改投影）；
   未命中但正式线已有该键的点，则回填回执后跳过；都没有才插入正式点 + 回执 + `write` 证明。
-- 失败闭：回执存在但正式点缺失 / 已撤回 / id 或键字段不符，装载整体回滚并报错。
+- 跳过闸（硬约束，禁止假跳过）：写任何 `skip` 前必须做「回执 → 正式点」三方对撞——
+  回执指向的正式点存在、未撤回（`retracted=0`）、在正式轴（`channel='primary'`）、
+  业务键四字段逐字段一致且回执状态为 `success`。任一不满足即抛错整笔回滚，
+  不得写 skip、不得在证明页显示跳过成功。
+- 对照留痕：对撞通过的每次跳过追加一条 `ingest_receipt_checks`（`verdict=matched`），
+  与当条 `skip` 证明以 `proof_id` 互链；对撞失败整体回滚不留痕。
+- 失败闭：回执存在但正式点缺失 / 已撤回 / 不在正式轴 / hop_id 或键字段不符，装载整体回滚并报错。
 - 证明：`ingest_proofs` 记录批次、业务键、动作（`write` / `skip`）、正式点 id、原因；
   `ingest_runs` 记录每轮写入 / 跳过与当轮正式点总数。
 
@@ -49,6 +55,7 @@ npm run dev
 | POST | `/api/ingest/run` | 跑一批装载（不传 body 读本地夹具）；重复跑同夹具第二遍应全部跳过 |
 | GET | `/api/ingest/proofs?batch_id=...` | 按批次查幂等证明，附轮次汇总；可加 `run_id` / `action` |
 | GET | `/api/ingest/receipts?business_key=...` | 查装载回执 |
+| GET | `/api/ingest/receipt-checks?business_key=...` | 回执对照核证（只读）：跳过闸三方对撞留痕；指定业务键时附现场复核，可加 `batch_id` / `verdict` |
 | GET | `/api/ingest/runs?batch_id=...` | 查每轮装载汇总 |
 
 测试：`cd backend && python -m pytest tests -q`

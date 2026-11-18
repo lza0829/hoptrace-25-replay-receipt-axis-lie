@@ -89,6 +89,31 @@ CREATE INDEX IF NOT EXISTS idx_ingest_proofs_batch
 CREATE INDEX IF NOT EXISTS idx_ingest_proofs_key
   ON ingest_proofs(business_key, id);
 
+-- 回执对照核证：每次跳过闸的「回执 → 正式点」三方对撞留痕，只追加。
+-- 只有对照通过（matched）才允许写 skip 证明；对不上整体回滚，失败闭不留痕。
+CREATE TABLE IF NOT EXISTS ingest_receipt_checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  business_key TEXT NOT NULL,
+  receipt_hop_id TEXT NOT NULL,
+  receipt_status TEXT NOT NULL,
+  formal_hop_id TEXT,
+  formal_channel TEXT,
+  formal_retracted INTEGER,
+  key_match INTEGER NOT NULL,
+  verdict TEXT NOT NULL CHECK (verdict IN ('matched', 'mismatch')),
+  reason TEXT NOT NULL,
+  proof_id INTEGER,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_receipt_checks_key
+  ON ingest_receipt_checks(business_key, id);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_receipt_checks_batch
+  ON ingest_receipt_checks(batch_id, id);
+
 -- 每轮装载的汇总：同一批次可回放多轮，attempt 递增。
 CREATE TABLE IF NOT EXISTS ingest_runs (
   run_id TEXT PRIMARY KEY,

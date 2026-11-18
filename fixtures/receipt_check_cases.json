@@ -1,0 +1,73 @@
+{
+  "comment": "回执对照核证夹具：先跑 B-DEMO-01 建立成功回执，再按 cases 在 SQLite 内篡改回执/正式点，随后重放同业务键批次。指错点必须失败闭（无 skip 留痕、整笔回滚），回执正确必须正常跳过。",
+  "seed_batch_id": "B-DEMO-01",
+  "replay_hops": [
+    {
+      "id": "H-5",
+      "waybill_id": "WB-1001",
+      "event_ts": "2026-11-17T19:20:00Z",
+      "location_code": "HZ-STATION",
+      "event_code": "OUT_FOR_DELIVERY",
+      "seq": 4
+    },
+    {
+      "id": "H-6",
+      "waybill_id": "WB-1002",
+      "event_ts": "2026-11-17T10:00:00Z",
+      "location_code": "SH-LOCAL",
+      "event_code": "OUT_FOR_DELIVERY",
+      "seq": 2
+    }
+  ],
+  "targets": {
+    "H5_key": "WB-1001|2026-11-17T19:20:00Z|HZ-STATION|OUT_FOR_DELIVERY",
+    "H6_key": "WB-1002|2026-11-17T10:00:00Z|SH-LOCAL|OUT_FOR_DELIVERY"
+  },
+  "cases": [
+    {
+      "id": "receipt-points-missing-formal",
+      "title": "回执指向已删除（不存在）的正式点",
+      "batch_id": "B-CHK-MISSING",
+      "mutations": [
+        {"op": "delete", "table": "hops", "where": {"id": "H-5"}}
+      ],
+      "expect_ok": false,
+      "expect_error_contains": "不存在",
+      "tampered_business_key": "WB-1001|2026-11-17T19:20:00Z|HZ-STATION|OUT_FOR_DELIVERY"
+    },
+    {
+      "id": "receipt-points-retracted-formal",
+      "title": "回执指向已撤回点仍要求 skipped（硬禁止）",
+      "batch_id": "B-CHK-RETRACTED",
+      "mutations": [
+        {"op": "update", "table": "hops", "where": {"id": "H-5"}, "set": {"retracted": 1}}
+      ],
+      "expect_ok": false,
+      "expect_error_contains": "撤回",
+      "tampered_business_key": "WB-1001|2026-11-17T19:20:00Z|HZ-STATION|OUT_FOR_DELIVERY"
+    },
+    {
+      "id": "receipt-hop-id-key-mismatch",
+      "title": "回执 hop_id 与业务键正式点不一致（指向别的业务键正式点 H-6）仍成功（硬禁止）",
+      "batch_id": "B-CHK-MISMATCH",
+      "mutations": [
+        {"op": "delete", "table": "ingest_receipts", "where": {"business_key": "WB-1002|2026-11-17T10:00:00Z|SH-LOCAL|OUT_FOR_DELIVERY"}},
+        {"op": "update", "table": "ingest_receipts", "where": {"business_key": "WB-1001|2026-11-17T19:20:00Z|HZ-STATION|OUT_FOR_DELIVERY"}, "set": {"hop_id": "H-6"}}
+      ],
+      "expect_ok": false,
+      "expect_error_contains": "不一致",
+      "tampered_business_key": "WB-1001|2026-11-17T19:20:00Z|HZ-STATION|OUT_FOR_DELIVERY"
+    },
+    {
+      "id": "receipt-correct-skips",
+      "title": "回执正确：指向存在、未撤回、业务键一致的正式点，应整键跳过",
+      "batch_id": "B-CHK-OK",
+      "mutations": [],
+      "expect_ok": true,
+      "expect_skipped": 2,
+      "expect_written": 0,
+      "expect_skip_reason": "receipt_exists",
+      "tampered_business_key": null
+    }
+  ]
+}

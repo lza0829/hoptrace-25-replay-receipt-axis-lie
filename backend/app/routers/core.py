@@ -93,6 +93,21 @@ def ingest_receipts(business_key: str | None = None):
     return ingest_svc.list_receipts(business_key)
 
 
+@router.get("/ingest/receipt-checks")
+def ingest_receipt_checks(
+    batch_id: str | None = None,
+    business_key: str | None = None,
+    verdict: str | None = None,
+):
+    """回执对照核证只读接口：跳过闸三方对撞留痕，可按业务键现场复核。"""
+    try:
+        return ingest_svc.query_receipt_checks(
+            batch_id=batch_id, business_key=business_key, verdict=verdict
+        )
+    except replay.IdempotencyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.get("/ingest/runs")
 def ingest_runs(batch_id: str | None = None):
     return ingest_svc.list_runs(batch_id)

@@ -71,14 +71,17 @@ def run_batch(payload: dict | None = None) -> dict:
 
             receipt = replay.find_receipt(conn, key)
             if receipt is not None:
-                formal = _load_formal_by_key(conn, fields)
-                replay.assert_receipt_points_to_formal(receipt, formal)
+                # 跳过闸：按回执指向的 hop_id 取正式点做三方对撞；
+                # 点缺失 / 已撤回 / 不在正式轴 / 业务键不一致 → 抛错整体回滚，
+                # 不写 skip 证明、不留「跳过成功」假象。
+                formal = replay.load_formal_by_hop_id(conn, receipt["hop_id"])
+                check = replay.assert_receipt_reconciles(receipt, formal, fields)
                 reason = (
                     REASON_DUPLICATE_IN_BATCH
                     if receipt["first_run_id"] == run_id
                     else REASON_RECEIPT_EXISTS
                 )
-                replay.record_proof(
+                proof_id = replay.record_proof(
                     conn,
                     batch_id=batch_id,
                     run_id=run_id,
@@ -86,6 +89,15 @@ def run_batch(payload: dict | None = None) -> dict:
                     action=replay.ACTION_SKIP,
                     hop_id=receipt["hop_id"],
                     reason=reason,
+                    now=now,
+                )
+                # 对照留痕与 skip 证明互链：证明页可凭 proof_id 反查核证。
+                replay.record_receipt_check(
+                    conn,
+                    batch_id=batch_id,
+                    run_id=run_id,
+                    check=check,
+                    proof_id=proof_id,
                     now=now,
                 )
                 skipped += 1
@@ -109,8 +121,8 @@ def run_batch(payload: dict | None = None) -> dict:
                     now=now,
                     source=replay.SOURCE_FORMAL_BACKFILL,
                 )
-                replay.assert_receipt_points_to_formal(receipt, formal)
-                replay.record_proof(
+                check = replay.assert_receipt_reconciles(receipt, formal, fields)
+                proof_id = replay.record_proof(
                     conn,
                     batch_id=batch_id,
                     run_id=run_id,
@@ -118,6 +130,14 @@ def run_batch(payload: dict | None = None) -> dict:
                     action=replay.ACTION_SKIP,
                     hop_id=formal["id"],
                     reason=REASON_FORMAL_BACKFILL,
+                    now=now,
+                )
+                replay.record_receipt_check(
+                    conn,
+                    batch_id=batch_id,
+                    run_id=run_id,
+                    check=check,
+                    proof_id=proof_id,
                     now=now,
                 )
                 skipped += 1
@@ -157,8 +177,10 @@ def run_batch(payload: dict | None = None) -> dict:
                 run_id=run_id,
                 now=now,
             )
-            replay.assert_receipt_points_to_formal(
-                receipt, _load_formal_by_key(conn, fields)
+            # 新写入也立即三方对撞：回执 hop_id 必须能取回同键正式点，
+            # 对不上同样失败闭，防止带病回执进入下一轮跳过闸。
+            replay.assert_receipt_reconciles(
+                receipt, replay.load_formal_by_hop_id(conn, receipt["hop_id"]), fields
             )
             replay.record_proof(
                 conn,
@@ -267,6 +289,51 @@ def list_receipts(business_key: str | None = None) -> list[dict]:
     conn = connect()
     try:
         return replay.list_receipts(conn, business_key=business_key)
+    finally:
+        conn.close()
+
+
+def query_receipt_checks(
+    batch_id: str | None = None,
+    business_key: str | None = None,
+    verdict: str | None = None,
+) -> dict:
+    """回执对照核证只读查询：留痕汇总 + 明细 +（指定业务键时）现场复核。
+
+    与回执查询、装载跳过闸、证明页协同：
+    * 留痕来自每次跳过闸的三方对撞，与 skip 证明以 ``proof_id`` 互链；
+    * 指定 ``business_key`` 时，按回执现状再做一次只读现场对撞，
+      即便留痕之后数据被改坏，也能当场暴露「回执指向与正式成员不对板」。
+    """
+    conn = connect()
+    try:
+        checks = replay.list_receipt_checks(
+            conn,
+            batch_id=batch_id,
+            business_key=business_key,
+            verdict=verdict,
+        )
+        result = {
+            "ok": True,
+            "filters": {
+                "batch_id": batch_id,
+                "business_key": business_key,
+                "verdict": verdict,
+            },
+            "summary": replay.receipt_check_summary(
+                conn, batch_id=batch_id, business_key=business_key
+            ),
+            "checks": checks,
+        }
+        if business_key:
+            receipt = replay.find_receipt(conn, business_key)
+            if receipt is not None:
+                result["receipt"] = dict(receipt)
+                result["live_check"] = replay.reconcile_receipt(conn, receipt)
+            else:
+                result["receipt"] = None
+                result["live_check"] = None
+        return result
     finally:
         conn.close()
 

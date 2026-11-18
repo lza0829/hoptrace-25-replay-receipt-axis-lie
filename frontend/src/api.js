@@ -29,6 +29,14 @@ export const api = {
         ? `/api/ingest/receipts?business_key=${encodeURIComponent(businessKey)}`
         : '/api/ingest/receipts',
     ),
+  receiptChecks: ({ batchId, businessKey, verdict } = {}) => {
+    const q = new URLSearchParams()
+    if (batchId) q.set('batch_id', batchId)
+    if (businessKey) q.set('business_key', businessKey)
+    if (verdict) q.set('verdict', verdict)
+    const qs = q.toString()
+    return req(`/api/ingest/receipt-checks${qs ? `?${qs}` : ''}`)
+  },
   proofs: (waybillId) =>
     req(waybillId ? `/api/status-proofs?waybill_id=${encodeURIComponent(waybillId)}` : '/api/status-proofs'),
 }
